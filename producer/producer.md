@@ -53,4 +53,4 @@ acks 的默认值为 1, 即只要分区的 leader 只要收到消息即可.
 
 # 如何保证消息生产的有序
 kafka 只保证同一分区消息的有序性. 因此, 如果要让某些消息有序,可以让这些消息发送到同一个分区之中.
-实际上,即使同一个分区也有可能导致消息的乱序. 这是由 `retries` 和 `max.in.flight.requests.per.connection`导致的. 如果 max.in.flight.requests.per.connection 的值大于1 同时 retries 的值大于1, 如果前面的消息发送失败了,然后重试就会导致消息的乱序. 通常要保证有序,我们需要将 max.in.flight.requests.per.connection 的值设置为1,但是这样会导致发送消息的吞吐量降低.
+实际上,即使同一个分区也有可能导致消息的乱序. 这是由 `retries` 和 `max.in.flight.requests.per.connection`导致的. 如果 max.in.flight.requests.per.connection 的值大于1 同时 retries 的值大于1, 如果前面的消息发送失败了,然后重试就会导致消息的乱序. 通常要保证生产有序,我们需要将 max.in.flight.requests.per.connection 的值设置为1,但是这样会导致发送消息的吞吐量降低.

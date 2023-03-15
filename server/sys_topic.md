@@ -5,10 +5,52 @@
 
 在组协调器内部, 有个 offset cache 结构, 当消费者提交位移信息的时候, 会更新此 offset cache, 同时将消费者组的偏移信息作为一条新的消息持久化到 __consumer_offsets 中. 这样即使当前组协调器宕机, 当选举出新的组协调器的时候, 也可以根据 __consumer_offsets 中的信息生成正确的 offset cache. 注意, 往 __consumer_offsets 中写入消息的时候, acks = -1, 即当分区所有的副本都接受到此消息后,才认为消息写入成功.
 
-offset cache 可以简单认为是一个 kv 结构, k 就是 groupid + topic + partition.
+offset cache 可以简单认为是一个 kv 结构, k 就是 groupid + topic + partition. 当消费者查询位移信息的时候, 就是从内存中直接查询信息的 而不是通过日志来查, 日志只是用来持久化.
+
+我们看看消费位移对应的消息格式:
+
+key:
++++++++++++++++++
+| group_id      |
++++++++++++++++++
+| topic         |
++++++++++++++++++
+| partition     |
++++++++++++++++++
+
+value:
++++++++++++++++++
+| offset        |
++++++++++++++++++
+| metadata      |
++++++++++++++++++
+| ...           |
++++++++++++++++++
 
 所以 __consumer_offsets 有什么用? 
 - 持久化消费组的元信息和位移信息
 - 利用 kafka 分区的副本机制, 提高可用性
 
 # __transaction_state
+
+我们来看看事务主题中消息的格式:
+
+key:
++++++++++++++++++++++++++
+| transaction_id        |
++++++++++++++++++++++++++
+
+value:
++++++++++++++++++++++++++
+| produce_id            |   // 事务对应的 produce_id
++++++++++++++++++++++++++
+| epoch                 |   // produce_id 的纪元
++++++++++++++++++++++++++
+| transaction_timeout   |   // 事务协调器等待事务状态更新的超时时间, 有客户端参数`transaction.timeout.ms`设置
++++++++++++++++++++++++++
+| transaction_status    |   // 事务的状态
++++++++++++++++++++++++++
+| topic_partions        |   // 事务关联的分区,包括 __consumer_offsets 对应的分区
++++++++++++++++++++++++++
+
+同 __consumer_offsets 一样, broker 内存中会维护事务相应的数据结构, **磁盘日志仅仅用来持久化**.

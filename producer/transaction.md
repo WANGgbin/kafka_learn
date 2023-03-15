@@ -52,12 +52,31 @@ kafka 中的一个典型场景是:
 
 kafka 提供了 5 个事务相关的 api:
 - void initTransactions()
+
+此阶段会尝试寻找对应的事务协调器 并发送一个获取 produceID 的请求, 事务协调器查询内存中数据结构判断是否是第一次给该事务 id 分配 produceID, 如果是通过 zookeeper 分配一个 produceID, 并将 transactionID 和 produceID 的对应关系更新到内存的数据结果中并持久化到 __transaction_state 中. 如果不是第一次分配, 则直接从内存中获取对应的 produceID 并更新对应的 epoch(+1, 并持久化到磁盘中).
+
+注意, 如果不是第一次分配, 同时会判断之前事务的状态, 如果未完成, 会进行提交或者中止.
+
 - void beginTransaction()
+
+本地标记开启一个事务.
+
+- 发送消息
+
+当生产者给一个新的分区发送消息的时候, 首先会给事务协调器发送一个消息, 事务协调器会将 <trsactionID, topicPartition> 的映射关系更新到内存并持久化到磁盘中. 保存了这些分区信息, 后续才知道往哪些分区发送 COMMIT 或者 ABORT 控制信息.
+
 - void sendOffsetsToTransaction(map<TopicPatition, OffsetAndMetadata> offsets, string consumerGroupId);
 
 当开启事务后, 我们需要关闭位移的自动提交, 同时也不能手动提交位移. 而是通过发送位移信息给事务协调器, 事务协调器会在对应的事务中记录 consumerGroupId 对应的 __consumer_offsets 分区信息, 并发送位移信息给对应的组协调器.
 
 但是, 特别注意, 此时虽然位移消息发送给了组协调器, 但是此位移信息并没有生效.
 - void commitTransaction();
+
+当调用此函数时, 事务协调器收到请求后, 会给消息分区 和 __consumer_offsets 分区发送 commit 控制信息. 此时, 提交给组协调器的位移信息才生效.
+
+客户端是怎么消费事务消息的呢? 客户端有个参数 `isolation_level` 可以设置事务隔离级别. 隔离级别只有两个值: `read_uncommited` 和 `read_commited`, 默认值是 read_uncommited. 
+
+在 read_uncommited 隔离级别下, 消费者正常消费事务消息. 在 read_commited 级别下, 消费者并不会直接消费事务消息, 而是先缓存, 等接受到控制信息的时候, 要么投递给消费者(COMMIT), 要么丢弃消息(ABORT).
 - void abortTransaction();
 
+基本同 commitTransaction(), 只不过发送的控制消息是 ABORT.

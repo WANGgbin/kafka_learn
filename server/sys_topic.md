@@ -53,4 +53,4 @@ value:
 | topic_partions        |   // 事务关联的分区,包括 __consumer_offsets 对应的分区
 +++++++++++++++++++++++++
 
-同 __consumer_offsets 一样, broker 内存中会维护事务相应的数据结构, **磁盘日志仅仅用来持久化**.
+同 __consumer_offsets 一样, broker 内存中会维护事务相应的数据结构, **磁盘日志仅仅用来持久化, 查询都是在内存中进行的**.

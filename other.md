@@ -47,6 +47,21 @@
 
         我们知道一个 topic 下可以有多个 partition。多个 partition 可以充分利用多机的能力，进一步提高系统的写吞吐。
 
+    - 磁盘顺序写入
+
+        kafka 通过磁盘顺序写入的方式大大提高了磁盘写入的性能。
+
+- consumer
+
+    - 批量拉取
+
+        一次 fetch 可以拉取多个消息
+
+    - 并行消费
+
+        一个 consumer group 中的多个 consumer 可以同时消费不同的 partition
+        
+
 # 消息堆积了，通常是什么原因？如何排查？
 
 - 频繁重平衡

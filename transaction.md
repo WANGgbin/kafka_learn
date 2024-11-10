@@ -50,6 +50,47 @@ producer 给集群中某个节点(负载最低节点，即目前 inflightRequest
 到 __transaction_state 中。
 
 
+那么 coordinator 是如何分配 produceID 的呢？通过 `zookeeper` 完成的，zookeeper 有一个特定的节点，存储当前已分配的最新的 producerID，同时 zookeeper 每个节点都自带版本信息。
+
+coordinator 就是通过乐观锁的方式分配 producerID 的。源码如下：
+
+```scala
+object ZkProducerIdManager {
+  def getNewProducerIdBlock(brokerId: Int, zkClient: KafkaZkClient, logger: Logging): ProducerIdsBlock = {
+    // Get or create the existing PID block from ZK and attempt to update it. We retry in a loop here since other
+    // brokers may be generating PID blocks during a rolling upgrade
+    var zkWriteComplete = false
+    while (!zkWriteComplete) {
+      // 从 zookeeper 获取已分配的 id 和节点的版本信息
+      val (dataOpt, zkVersion) = zkClient.getDataAndVersion(ProducerIdBlockZNode.path)
+
+      // generate the new producerId block
+      val newProducerIdBlock = dataOpt match {
+        // 如果节点已经存在
+        case Some(data) =>
+          val currProducerIdBlock = ProducerIdBlockZNode.parseProducerIdBlockData(data)
+
+          // 基于当前 producerID 分配 1000 个 id
+          new ProducerIdsBlock(brokerId, currProducerIdBlock.nextBlockFirstId(), ProducerIdsBlock.PRODUCER_ID_BLOCK_SIZE)
+        case None =>
+          // 节点不存在，则创建，初始值为 0
+          new ProducerIdsBlock(brokerId, 0L, ProducerIdsBlock.PRODUCER_ID_BLOCK_SIZE)
+      }
+
+      val newProducerIdBlockData = ProducerIdBlockZNode.generateProducerIdBlockJson(newProducerIdBlock)
+
+      // 更新 zookeeper，这里是通过乐观锁的方式更新的。如果发生了冲突，则再次尝试更新
+      val (succeeded, version) = zkClient.conditionalUpdatePath(ProducerIdBlockZNode.path, newProducerIdBlockData, zkVersion, None)
+      zkWriteComplete = succeeded
+
+      // 更新成功直接返回
+      if (zkWriteComplete) {
+        return newProducerIdBlock
+      }
+    }
+  }
+}
+```
 ### begin transaction
 
 producer 只是更改本地事务状态，这一步不会与 coordinator 交互。

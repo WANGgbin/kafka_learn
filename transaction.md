@@ -1,4 +1,4 @@
-描述 kafka 中事务相关实现。<br>
+描述 kafka 中事务相关实现。
 
 # 为什么要有事务
 
@@ -107,6 +107,12 @@ producer 只是更改本地事务状态，这一步不会与 coordinator 交互�
 
 这里有个问题，发送之后，消费者不就可以看到这个消息了？有可能。我们在消费者部分描述事务场景下的消费逻辑。
 
+这里还有个问题需要注意，如果发送一个消息失败，producer 内部会有重试机制，但这可能导致同一个消息发送多次。producer 认为发送失败了，比如超时，
+但实际上发送成功了，然后 producer 重试，最后导致消息重复了。怎么办呢？
+
+kafka 实现了幂等发送机制。当打开 enable.idempotence 后，broker 会为每个 producer 分配一个 id(为了区分不同的 producer，当然由中心化的节点分配，而不是每个 producer 分配)。
+而 producer 为每个分区分配一个从 0 开始的偏移量。broker 收到后会判断当前消息的 seq 是不是等于上次 seq + 1，如果是，那就存储。如果 < 了，说明已经存储了，如果 > 了，说明
+乱序了，则返回错误。
 
 ### 提交消费位移
 
@@ -125,7 +131,9 @@ control batch(该 batch 中只有一条 record)。当分区 ISR 所有副本都�
 
 ## LSO 管理
 
-普通分区 leader 也为事务维护了一个上下文，包括 ongoingTxns(进行中的事务)、unreplicatedTxns(leader 已经写入事务 control record，但是 ISR 中副本尚未同步该记录)，两者都是 map 结构，key 为事务第一条消息的 offset，value 为事务信息。当 ISR 中所有副本都同步了该控制记录后，leader 就会把该事务移除并尝试更新 LSO。当然，具体实现上，与 update HW 逻辑类似，在收到 replicate 的 fetch 请求的时候，就会尝试更新 LSO，LSO 取值为 ongoingTxns 与 unreplicatedTxns 中最小的偏移量。其源码如下：
+普通分区 leader 也为事务维护了一个上下文，包括 ongoingTxns(进行中的事务)、unreplicatedTxns(leader 已经写入事务 control record，但是 ISR 中副本尚未同步该记录)，两者都是 map 结构，key 为事务第一条消息的 offset，value 为事务信息。
+当 ISR 中所有副本都同步了该控制记录后，leader 就会把该事务移除并尝试更新 LSO。当然，具体实现上，与 update HW 逻辑类似，在收到 replicate 的 fetch 请求的时候，就会尝试更新 LSO，LSO 取值为 ongoingTxns 与 unreplicatedTxns 中最小的偏移量。
+其源码如下：
 
 ```java
 /**
@@ -156,13 +164,13 @@ consumer 能消费哪些事务消息呢？这就涉及到 **隔离级别** 的�
 
 READ_COMMITED，即只有消息提交后，消费者才可以看到消息。那么是怎么实现的呢？
 
-我们知道对于普通信息，consumer 只能读取到 HW(High Watermark) 之前的消息。在引入 kafka 事务后，多了一个 LSO(Last Stable Offset) 的概念，LSO 之前所有的事务消息都是提交的。<br>
+我们知道对于普通信息，consumer 只能读取到 HW(High Watermark) 之前的消息。在引入 kafka 事务后，多了一个 LSO(Last Stable Offset) 的概念，LSO 之前所有的事务消息都是提交的。
 在 READ_COMMITED 隔离级别下，consumer 只能读取 min(LSO，HW) 之前的消息。
 
-现在有个问题，因为事务的控制消息是在普通事务消息之后写入的，那么消费者在读取到一条事务消息的时候，怎么知道对应的事务提交还是回滚了呢？一种思路是可以先不处理该消息而是暂存下来，只有<br>
+现在有个问题，因为事务的控制消息是在普通事务消息之后写入的，那么消费者在读取到一条事务消息的时候，怎么知道对应的事务提交还是回滚了呢？一种思路是可以先不处理该消息而是暂存下来，只有
 读取到对应的控制消息后，再根据控制消息类型决定是否消息前面暂存的所有事务消息。但这种方式打破了 **顺序消费** 的保障，消费者不再按照顺序的方式消费消息。
 
-实际上，消费者从 broker fetch 的 resp 中，除了 records 外，还包括 abortedTxns 信息，该信息含义为本次 fetch 的 事务 records 对应的 abortedTxn 信息。这样消费者在遇到事务消息的时候，就可以判断其 producerID<br>
+实际上，消费者从 broker fetch 的 resp 中，除了 records 外，还包括 abortedTxns 信息，该信息含义为本次 fetch 的 事务 records 对应的 abortedTxn 信息。这样消费者在遇到事务消息的时候，就可以判断其 producerID
 是不是在 abortedTxns 中，如果在就表示事务 aborted 了，直接忽略当前记录，否则就表示事务提交了，消费当前记录。对应的源码如下：
 
 ```java
@@ -248,7 +256,7 @@ private void consumeAbortedTransactionsUpTo(long offset) {
 
 那么在 broker 中，是如何维护 abortedTxn 的呢？
 
-这部分信息是需要持久化的，在 kafka 的 log 目录中，每个 logsegment 对应一个 txnindex 文件，该文件保存对应的 log segment 中 aborted 的事务元信息，每个事务包括：firsetOffset、lastOffset、LSO(当前时刻 LSO 取值)。<br>
+这部分信息是需要持久化的，在 kafka 的 log 目录中，每个 logsegment 对应一个 txnindex 文件，该文件保存对应的 log segment 中 aborted 的事务元信息，每个事务包括：firsetOffset、lastOffset、LSO(当前时刻 LSO 取值)。
 为什么要存储 LSO 呢？这跟 broker 处理 fetch 请求时，查找一定 offset 范围内的 abortedTxn 相关。我们看看代码实现：
 
 ```scala

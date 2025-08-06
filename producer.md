@@ -2,7 +2,7 @@
 
 # 架构
 
-kafka producer 整体包括两部分：producer 主线程、sender 线程。<br>
+kafka producer 整体包括两部分：producer 主线程、sender 线程。
 
 主线程负责把数据发送到 RecordAccumelator，sender 线程从 RecordAccumelator 读取数据并发送给 broker.
 
@@ -56,9 +56,13 @@ kafka producer 整体包括两部分：producer 主线程、sender 线程。<br>
 
     为了避免消息体过大导致网络 i/o 压力过大，在发送请求前还会压缩数据。
 
-- 一条 tcp 连接可以同时发送多个请求
+- 一条 tcp 连接可以同时发送多个请求(pipeline)
 
     如果一个 tcp 连接同时只能存在一个 inflightRequests，那整个吞吐是比较差的。就跟未开启 pipeline 的 http 请求一样。
+
+- 多分区特性
+
+    得益于 topic 的多分区特性，发送消息时，同时给多个分区发送消息，进一步提高整体吞吐。
 
 # 集群元信息更新
 
@@ -130,7 +134,9 @@ kafka producer 整体包括两部分：producer 主线程、sender 线程。<br>
 
 # 如何保证消息有序
 
-将 max.inflight.requests.per.connection 设置为 1 即可。
+将 max.inflight.requests.per.connection 设置为 1 即可，但是这种方式不太建议，吞吐太低了。
+
+其实当我们打开 enable.idempotence 后，也是能保证有序的。吞吐量比上述方式还高。
 
 # 请求发送超时如何实现的
 
@@ -164,7 +170,7 @@ public List<ClientResponse> poll(long timeout, long now) {
             this.selector.close(nodeId);
             // 这一步实际上是构造超时的 resp，并添加到 response 中。
             // 这个思想很值得我们学习，虽然我们并没有真正收到来自 broker 的 resp，但通过模拟一个 resp，从而可以在后续处理 resp 的流程中
-            // 同一处理超时的错误。
+            // 统一处理超时的错误。
             // 优秀程序员的一大能力就是：抽象。
             processTimeoutDisconnection(responses, nodeId, now);
         }

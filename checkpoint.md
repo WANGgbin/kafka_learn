@@ -76,6 +76,7 @@ private boolean isUpdateNeeded(EpochEntry entry) {
 kafka 采用的思路是：
 
 - 先创建一个 tmp 文件，写 tmp 文件
-- 然后通过操作系统的 mv 能力，原子性的使用 tmp 文件替换 checkpoint 文件
+- 然后通过操作系统的 mv 能力，原子性的使用 tmp 文件替换 checkpoint 文件。已经打开就文件的进程仍然可以正常访问旧文件。
+当所有的进程都关闭文件后，旧的文件才会真正删除。
 
 如此一来，即使写 tmp 文件失败，也没关系，原来 checkpoint 文件中的数据不受影响，后面可以再次 checkpoint 重试。

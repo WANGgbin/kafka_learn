@@ -2,8 +2,8 @@
 
 # __consumer_state
 
-kafka 专门使用一个内部主题 __consumer_state 来保存消费组的信息。__consumer_state 的每个分区所在的 broker 也称为 consumer group coordinator。<br>
-那么如何确定一个消费组对应的 coordinator 是哪个呢？<br>
+kafka 专门使用一个内部主题 __consumer_state 来保存消费组的信息。__consumer_state 的每个分区所在的 broker 也称为 consumer group coordinator。
+那么如何确定一个消费组对应的 coordinator 是哪个呢？
 每个消费组对应一个 groupID，计算方式为 hash(groupID) % partitionCnt。
 
 # 重平衡
@@ -16,19 +16,19 @@ kafka 专门使用一个内部主题 __consumer_state 来保存消费组的信�
 
 ### FindCoordinator
 
-新加入的节点不知道消费组的 coordinator 是谁，所以第一步需要查找对应的 coordinator。给负载最小的节点 broker (TODO：待确定)发送 FindCoordinator 请求，broker 收到请求后,<br>
+新加入的节点不知道消费组的 coordinator 是谁，所以第一步需要查找对应的 coordinator。给负载最小的节点 broker (TODO：待确定)发送 FindCoordinator 请求，broker 收到请求后,
 通过前面介绍的分配算法计算到消费组对应的 coordinator，然后把 coordinator 信息发送给消费者。
 
 ### JoinGroup
 
-当消费者确定了 coordinator 后，就会给 coordinator 发送 JoinGroupRequest 表明自己想加入到 group 当中。coordinator 接收到 JoinGroupRequest 后，当消费组其他节点发来 heartBeatRequest<br>
+当消费者确定了 coordinator 后，就会给 coordinator 发送 JoinGroupRequest 表明自己想加入到 group 当中。coordinator 接收到 JoinGroupRequest 后，当消费组其他节点发来 heartBeatRequest
 的时候，coordinator 就会在 heartBeatResponse 加入信息告诉消费者，当前消费组要进行重平衡了。消费者收到后，就会给 coordinator 发送 JoinGroupRequest。
 
-coordinator 接收到 JoinGroupRequest 后，实际上并不会立即给消费者发送 JoinGroupResponse。为什么呢？<br>
-我们知道 coordinator 会给 消费组的 leader 节点的 JoinGroupResponse 中发送消费组成员信息，从而执行分区在消费组中的分配逻辑。<br>
-因此只有当消费组中所有成员都加入或者超时的时候，才会给 leader 发送 JoinGroupResponse 信息。可是对于其他非 leader 节点，为什么也是延迟发送 Response 呢？<br>
-想象一下在新一轮的 rebalance 中，如果给非 leader 节点立即回复 Response，但是 leader 节点下线了，那岂不是无法进行分区分配了？<br>
-因此，所有节点的 JoinGroupResponse 都是延迟发送的，当超时后，原来的 leader 节点还没有发送 JoinGroupRequest，则会在已经 Join 的节点中选择一个新的 leader。<br>
+coordinator 接收到 JoinGroupRequest 后，实际上并不会立即给消费者发送 JoinGroupResponse。为什么呢？
+我们知道 coordinator 会给 消费组的 leader 节点的 JoinGroupResponse 中发送消费组成员信息，从而执行分区在消费组中的分配逻辑。
+因此只有当消费组中所有成员都加入或者超时的时候，才会给 leader 发送 JoinGroupResponse 信息。可是对于其他非 leader 节点，为什么也是延迟发送 Response 呢？
+想象一下在新一轮的 rebalance 中，如果给非 leader 节点立即回复 Response，但是 leader 节点下线了，那岂不是无法进行分区分配了？
+因此，所有节点的 JoinGroupResponse 都是延迟发送的，当超时后，原来的 leader 节点还没有发送 JoinGroupRequest，则会在已经 Join 的节点中选择一个新的 leader。
 延时任务的时间对应的参数就是 group.rebalance.timeout.ms(消费组所有成员最大的 rebalance.timeout.ms)。
 
 我们大概看看 coordinator 处理 JoinGroupRequest 的代码：
@@ -392,6 +392,12 @@ private Optional<Errors> validateSyncGroup(
         }
     }
 ```
+
+这种 generation、term、epoch 的思路在分布式场景下也很常用。在分布式场景下，如果某种操作可能进行多轮，为了区分/隔离不同的轮次，需要引入
+generation、term、epoch 的概念。
+
+比如，在 raft 协议中，每当重新选举一个 leader 后，term 就会 + 1，集群就会进入一个新的 term。旧的 term 的消息都会被忽略。
+
 # 几个重要的消费者参数
 
 - session.timeout.ms
@@ -404,7 +410,7 @@ private Optional<Errors> validateSyncGroup(
 
 - max.poll.interval.ms
 
-    consumer poll 消息的最大时间间隔，当 consumer 的两次 poll超过了这个时间段，则认为 consumer 下线。<br>
+    consumer poll 消息的最大时间间隔，当 consumer 的两次 poll超过了这个时间段，则 consumer 停止发送心跳消息，进而触发重平衡。
     当 consumer 的消费逻辑耗时很长或者遇到 gc 等场景下，可能遇到此问题。
 
 - enable.auto.commit
@@ -418,6 +424,16 @@ private Optional<Errors> validateSyncGroup(
     - false
 
         当设置为 false 时，表示需要手动提交。如果某个消息消费成功了，但是在提交位移前系统宕机了或者提交位移失败了，则会导致消息的重复消费。消费逻辑应该做好幂等处理。
+        此外，因为位移提交是提交至 coordinator，且 coordinator 会等待 isr 所有副本都同步该信息，才返回，所以性能比较差。不过 kafka 也是直持异步提交(不是自动提交)
+        的。
+        
+        建议的方式是：手动异步提交，兼具吞吐的前提下，影响降到最低。
+
+# 重试
+
+与 rocketmq 不同，kafka 不支持消息重试。需要业务自己在应用层或者自己封装消费框架实现消息重试能力。
+
+与 rocketmq 不同，也没有顺序消费与并发消费的区别。完全在业务层自己决定。
 
 # 其他
 
@@ -425,11 +441,17 @@ private Optional<Errors> validateSyncGroup(
 
 ## coordinator
 
-因为一个消费组中的消费者之间是不会进行通信的。那么当消费组中加入一个新的节点，其他节点如何感知这个信息并参与到重平衡流程呢？<br>
-kafka 思路就是引入一个 coordinator 角色，消费者直接跟 coordinator 通信，那么 coordinator 又如何跟消费者通信呢？**通过 heartbeatResp 通信，这种思路也值得我们学习**。<br>
+因为一个消费组中的消费者之间是不会进行通信的。那么当消费组中加入一个新的节点，其他节点如何感知这个信息并参与到重平衡流程呢？
+kafka 思路就是引入一个 coordinator 角色，消费者直接跟 coordinator 通信，那么 coordinator 又如何跟消费者通信呢？**通过 heartbeatResp 通信，这种思路也值得我们学习**。
 消费者无须提供 server 能力，而是不断通过 heartbeat 给 coordinator 上报自己的健康信息，而 coordinator 可以通过 heartbeatResp 告诉消费者一些重要的信息。
+
+在 client 与 server 建立 tcp 连接后，如果 server 想与 client 通信有以下 3 种方式：
+
+- server 在响应 client 发送给 server 的心跳消息的 resp 中，带上一些关键信息
+- server 无需新建到 client 的连接，直接复用 client 到 server 的连接，在该 tcp 连接，发送请求。client 需要实现 server 能力，注册 processor 等。rocketmq 中事务场景，broker 向 producer 回查事务状态，就是通过这种方式。
+- server 建立到 client 的 tcp 连接。这种方法用的少。如果 client 很多，会比较消耗 server 资源。
 
 ## 状态机
 
-实际上，消费组跟 coordinator 的交互还是挺复杂的。kakfa 的思路是引入 `状态机` 来维护整个交互流程。<br>
+实际上，消费组跟 coordinator 的交互还是挺复杂的。kakfa 的思路是引入 `状态机` 来维护整个交互流程。
 这种状态机的思路值得我们学习，当涉及复杂的交互流程的时候，就可以使用状态机进行抽象。 

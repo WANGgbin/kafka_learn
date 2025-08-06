@@ -41,16 +41,16 @@ kafka 很多场景中都可以看到延时任务的影子。举几个例子：
 
 ## DelayJoin
 
-在 consumer group rebalance 的时候，consumer 会给 group coondinator 发送 JoinGroupRequest，group coondinator 在接收到 JoinGroupRequest 的时候
+在 consumer group rebalance 的时候，consumer 会给 group coordinator 发送 JoinGroupRequest，group coondinator 在接收到 JoinGroupRequest 的时候
 并不会立即发送 Resp 给 consumer，因为 leader consumer 的 JoinGroupResp 中需要包含 consumer group 中的所有成员信息，这样 leader consumer 才可以分配分区，
 因此，只有当所有的 consumer 都发送 JoinGroupRequest 后或者超时后(reblance.timeout.ms) 才发送 JoinGroupResponse 给 consumer。实际上在 consumer group
 首次初始化的时候，只能等到超时才发送 Resp，因为此场景下，我们无法知道有多少 consumer 要加入到 consumer group。<br>
 
 DelayJoin 的实现就是将一个 DelayJoin 对象扔到 timer 中，每当接收到 consumer 的 JoinGroupRequest 的时候，就会尝试判断下 DelayJoin 能否执行，因为当所有的
-comsumer 都发送 Request 后，就可以执行 DelayJoin 即发送 JoinGroupResp 了，无须等到超时。
+consumer 都发送 Request 后，就可以执行 DelayJoin 即发送 JoinGroupResp 了，无须等到超时。
 
 
-## DeplayProduce
+## DelayProduce
 
 当 producer 指定了 syncs 参数后，只有跟 syncs 数量匹配的副本都同步数据后，才可以给 producer 发送响应。所以也会创建一个延时任务。当接收到副本的 FetchRequest
 的时候，就会尝试判断下 DelayProduce 能不能执行，即是否满足 syncs 数量的副本都同步了数据，如果是，则取消延时任务并执行 DelayProduce 即给 producer 发送 Resp。
